@@ -1,5 +1,6 @@
 <?php
 header('Content-Type: application/json');
+session_start(); // Start the session to track scanned serial numbers
 
 // Inclure les fichiers nécessaires
 include_once 'db_connect.php'; // Connexion à la base de données
@@ -22,6 +23,11 @@ if (empty($numeroSerie)) {
 // Validation : format du numéro de série
 if (!preg_match('/^[A-Z0-9\-]+$/', $numeroSerie)) {
     jsonResponse('error', 'Le numéro de série a un format invalide.', [], 400);
+}
+
+// Check if the serial number has already been scanned in this session
+if (isset($_SESSION['scanned_serials']) && in_array($numeroSerie, $_SESSION['scanned_serials'])) {
+    jsonResponse('error', 'Attention ce produit est déjà scanné.', [], 409);
 }
 
 try {
@@ -58,7 +64,10 @@ try {
         }
     }
 
-    // Tout est valide, retournez le produit associé
+    // Tout est valide, ajouter le numéro de série scanné à la session
+    $_SESSION['scanned_serials'][] = $numeroSerie;
+
+    // Retourner le produit associé
     jsonResponse('success', 'Le numéro de série est valide.', ['nom_produit' => $produit['nom_produit']]);
 } catch (PDOException $e) {
     // Logs détaillés pour les erreurs de base de données
