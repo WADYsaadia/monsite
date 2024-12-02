@@ -2,25 +2,25 @@
 header('Content-Type: application/json');
 session_start(); // Start the session to track scanned serial numbers
 
-// Inclure les fichiers nécessaires
-include_once 'db_connect.php'; // Connexion à la base de données
+// Include necessary files
+include_once 'db_connect.php'; // Database connection
 
-// Fonction pour envoyer une réponse JSON standardisée
+// Function to send standardized JSON responses
 function jsonResponse($status, $message, $data = [], $httpCode = 200) {
     http_response_code($httpCode);
     echo json_encode(array_merge(['status' => $status, 'message' => $message], $data));
     exit;
 }
 
-// Assainissement et validation des paramètres d'entrée
+// Sanitize and validate input parameters
 $numeroSerie = isset($_POST['numero_serie']) ? trim($_POST['numero_serie']) : null;
 
-// Validation : vérifier que le champ n'est pas vide
+// Validation: check if the field is not empty
 if (empty($numeroSerie)) {
     jsonResponse('error', 'Le numéro de série est manquant ou invalide.', [], 400);
 }
 
-// Validation : format du numéro de série
+// Validation: format of the serial number
 if (!preg_match('/^[A-Z0-9\-]+$/', $numeroSerie)) {
     jsonResponse('error', 'Le numéro de série a un format invalide.', [], 400);
 }
@@ -31,7 +31,7 @@ if (isset($_SESSION['scanned_serials']) && in_array($numeroSerie, $_SESSION['sca
 }
 
 try {
-    // Vérifiez d'abord si le numéro de série existe dans la table Produits
+    // Check if the serial number exists in the Products table
     $queryProduits = "
         SELECT nom_produit 
         FROM Produits 
@@ -46,8 +46,8 @@ try {
         jsonResponse('error', 'Le numéro de série n\'existe pas dans la table Produits.', [], 404);
     }
 
-    // Vérifiez si le numéro de série est un doublon dans les commandes
-    if (strpos($numeroSerie, "ASSN-") !== 0) { // Exclut les numéros commençant par "ASSN-"
+    // Check if the serial number is a duplicate in orders
+    if (strpos($numeroSerie, "ASSN-") !== 0) { // Exclude numbers starting with "ASSN-"
         $queryCommandes = "
             SELECT COUNT(*) as count 
             FROM Commandes 
@@ -58,23 +58,23 @@ try {
         $stmtCommandes->execute();
         $result = $stmtCommandes->fetch(PDO::FETCH_ASSOC);
 
-        // Détection de doublon
+        // Duplicate detection
         if ($result && $result['count'] > 0) {
             jsonResponse('error', 'Ce numéro de série est déjà associé à une commande.', [], 409);
         }
     }
 
-    // Tout est valide, ajouter le numéro de série scanné à la session
+    // Everything is valid, add the scanned serial number to the session
     $_SESSION['scanned_serials'][] = $numeroSerie;
 
-    // Retourner le produit associé
+    // Return the associated product
     jsonResponse('success', 'Le numéro de série est valide.', ['nom_produit' => $produit['nom_produit']]);
 } catch (PDOException $e) {
-    // Logs détaillés pour les erreurs de base de données
+    // Detailed logs for database errors
     error_log("Erreur PDO : " . $e->getMessage(), 3, __DIR__ . '/../logs/error.log');
     jsonResponse('error', 'Erreur interne lors de la vérification du numéro de série.', [], 500);
 } catch (Exception $e) {
-    // Logs pour d'autres types d'erreurs
+    // Logs for other types of errors
     error_log("Erreur inattendue : " . $e->getMessage(), 3, __DIR__ . '/../logs/error.log');
     jsonResponse('error', 'Une erreur inattendue s\'est produite.', [], 500);
 }
