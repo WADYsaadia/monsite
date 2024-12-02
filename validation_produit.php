@@ -2,16 +2,6 @@
 
 header('Content-Type: application/json');
 
-// Désactiver l'affichage des erreurs en production
-if ($_SERVER['SERVER_NAME'] === 'localhost') {
-    ini_set('display_errors', 1);
-    ini_set('display_startup_errors', 1);
-    error_reporting(E_ALL);
-} else {
-    ini_set('display_errors', 0);
-    error_reporting(0);
-}
-
 // Inclure les fichiers nécessaires
 include_once 'api.php'; // Contient la fonction CallAPI
 include_once 'db_connect.php'; // Connexion à la base de données
@@ -23,83 +13,103 @@ function jsonResponse($status, $message, $data = [], $httpCode = 200) {
     exit;
 }
 
-// Vérification des paramètres
-$bonLivraison = isset($_POST['bon_livraison']) ? filter_var(trim($_POST['bon_livraison']), FILTER_SANITIZE_STRING) : null;
-$produitsScannes = isset($_POST['produits']) ? json_decode($_POST['produits'], true) : null;
-
-if (!$bonLivraison || !is_array($produitsScannes)) {
-    jsonResponse('error', 'Paramètres bon_livraison ou produits manquants ou invalides.', [], 400);
-}
-
-// Construire l'URL pour récupérer les produits associés au bon de livraison via l'API
-$encodedBonLivraison = urlencode($bonLivraison);
-$apiUrl = "https://erp.powertechsystems.eu/api/index.php/shipments?sqlfilters=(t.ref%3A%3D%3A'$encodedBonLivraison')";
-
-// Appel de l'API
-$decodedResponse = CallAPI('GET', $apiUrl);
-if (!$decodedResponse || isset($decodedResponse['error'])) {
-    jsonResponse('error', 'Erreur lors de la récupération des produits via l\'API.', [], 500);
-}
-
-if (empty($decodedResponse)) {
-    jsonResponse('error', "Le bon de livraison $bonLivraison n'a pas été trouvé.", [], 404);
-}
-
-// Extraction des produits de l'API
-$produitsAPI = [];
-foreach ($decodedResponse[0]['lines'] ?? [] as $line) {
-    $produitsAPI[] = [
-        'nom_produit' => $line['ref'] ?? 'Référence non disponible',
-        'quantite' => $line['qty'] ?? 0
-    ];
-}
-
-// Comparaison des produits scannés et des produits de l'API
-$erreurs = [];
-foreach ($produitsScannes as $produitScanne) {
-    $trouve = false;
-    foreach ($produitsAPI as $produitAPI) {
-        if ($produitScanne['nom_produit'] === $produitAPI['nom_produit']) {
-            $trouve = true;
-            if ($produitScanne['quantite'] != $produitAPI['quantite']) {
-                $erreurs[] = [
-                    'produit' => $produitScanne['nom_produit'],
-                    'erreur' => "Quantité incorrecte : attendu {$produitAPI['quantite']}, reçu {$produitScanne['quantite']}."
-                ];
-            }
-            break;
+// Vérification et validation des paramètres d'entrée
+function validateInputs($bonLivraison, $produitsScannes) {
+    if (!$bonLivraison || !is_array($produitsScannes)) {
+        jsonResponse('error', 'Paramètres bon_livraison ou produits manquants ou invalides.', [], 400);
+    }
+    foreach ($produitsScannes as $produit) {
+        if (!isset($produit['nom_produit'], $produit['quantite'])) {
+            jsonResponse('error', 'Structure invalide pour un produit scanné.', [], 400);
         }
     }
-    if (!$trouve) {
-        $erreurs[] = [
-            'produit' => $produitScanne['nom_produit'],
-            'erreur' => "Produit non trouvé dans le bon de livraison."
-        ];
-    }
 }
 
-// Vérification des produits manquants dans le scan
-foreach ($produitsAPI as $produitAPI) {
-    $trouve = false;
+// Optimisation des produits pour une recherche rapide
+function indexProductsByName($produits) {
+    $indexed = [];
+    foreach ($produits as $produit) {
+        $indexed[$produit['nom_produit']] = $produit['quantite'];
+    }
+    return $indexed;
+}
+
+// Validation des produits
+function validateProducts($produitsScannes, $produitsAPI) {
+    $errors = [];
+    $apiIndex = indexProductsByName($produitsAPI);
+
+    // Vérifier les produits scannés
     foreach ($produitsScannes as $produitScanne) {
-        if ($produitScanne['nom_produit'] === $produitAPI['nom_produit']) {
-            $trouve = true;
-            break;
+        $nomProduit = $produitScanne['nom_produit'];
+        $quantiteScannee = $produitScanne['quantite'];
+
+        if (!isset($apiIndex[$nomProduit])) {
+            $errors[] = [
+                'produit' => $nomProduit,
+                'erreur' => "Produit non trouvé dans le bon de livraison."
+            ];
+        } elseif ($apiIndex[$nomProduit] != $quantiteScannee) {
+            $errors[] = [
+                'produit' => $nomProduit,
+                'erreur' => "Quantité incorrecte : attendu {$apiIndex[$nomProduit]}, reçu $quantiteScannee."
+            ];
         }
     }
-    if (!$trouve) {
-        $erreurs[] = [
-            'produit' => $produitAPI['nom_produit'],
-            'erreur' => "Produit manquant dans le scan utilisateur."
+
+    // Vérifier les produits manquants dans le scan
+    $scannedIndex = indexProductsByName($produitsScannes);
+    foreach ($apiIndex as $nomProduit => $quantiteAttendue) {
+        if (!isset($scannedIndex[$nomProduit])) {
+            $errors[] = [
+                'produit' => $nomProduit,
+                'erreur' => "Produit manquant dans le scan utilisateur."
+            ];
+        }
+    }
+
+    return $errors;
+}
+
+try {
+    // Entrées utilisateur
+    $bonLivraison = isset($_POST['bon_livraison']) ? filter_var(trim($_POST['bon_livraison']), FILTER_SANITIZE_STRING) : null;
+    $produitsScannes = isset($_POST['produits']) ? json_decode($_POST['produits'], true) : null;
+
+    // Validation des entrées
+    validateInputs($bonLivraison, $produitsScannes);
+
+    // Récupération des produits associés via l'API
+    $apiUrl = "https://erp.powertechsystems.eu/api/index.php/shipments?sqlfilters=(t.ref%3A%3D%3A'$bonLivraison')";
+    $decodedResponse = CallAPI('GET', $apiUrl);
+
+    if (!$decodedResponse || isset($decodedResponse['error'])) {
+        jsonResponse('error', 'Erreur lors de la récupération des produits via l\'API.', [], 500);
+    }
+    if (empty($decodedResponse)) {
+        jsonResponse('error', "Le bon de livraison $bonLivraison n'a pas été trouvé.", [], 404);
+    }
+
+    // Extraire les produits de l'API
+    $produitsAPI = [];
+    foreach ($decodedResponse[0]['lines'] ?? [] as $line) {
+        $produitsAPI[] = [
+            'nom_produit' => $line['ref'] ?? 'Référence non disponible',
+            'quantite' => $line['qty'] ?? 0
         ];
     }
-}
 
-// Retourner les résultats
-if (empty($erreurs)) {
-    jsonResponse('success', 'Tous les produits correspondent et les quantités sont correctes.', [], 200);
-} else {
-    jsonResponse('error', 'Des erreurs ont été détectées.', ['erreurs' => $erreurs], 400);
-}
+    // Validation des produits
+    $errors = validateProducts($produitsScannes, $produitsAPI);
 
+    // Résultat final
+    if (empty($errors)) {
+        jsonResponse('success', 'Tous les produits correspondent et les quantités sont correctes.', [], 200);
+    } else {
+        jsonResponse('error', 'Des erreurs ont été détectées.', ['erreurs' => $errors], 400);
+    }
+} catch (Exception $e) {
+    error_log("Erreur lors de la validation des produits : " . $e->getMessage(), 3, __DIR__ . '/../logs/error.log');
+    jsonResponse('error', 'Erreur interne lors de la validation des produits.', [], 500);
+}
 ?>
