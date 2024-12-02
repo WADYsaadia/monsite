@@ -6,26 +6,37 @@ require_once 'db_connect.php';
 header('Content-Type: application/json');
 
 try {
-    // Vérifier que le paramètre 'bon-livraison' est fourni
-    if (!isset($_POST['bon_livraison'])) {
-        http_response_code(400); // Mauvaise requête
-        echo json_encode(['error' => 'Le paramètre "bon_livraison" est manquant.']);
+    // Vérification de la méthode HTTP
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405); // Méthode non autorisée
+        echo json_encode(['error' => 'Méthode non autorisée. Utilisez POST.']);
         exit;
     }
 
-    // Récupérer et sécuriser le paramètre 'bon-livraison'
+    // Vérifier que le paramètre 'bon_livraison' est fourni
+    if (empty($_POST['bon_livraison'])) {
+        http_response_code(400); // Mauvaise requête
+        echo json_encode(['error' => 'Le paramètre "bon_livraison" est manquant ou vide.']);
+        exit;
+    }
+
+    // Récupérer et sécuriser le paramètre 'bon_livraison'
     $bonLivraison = filter_var(trim($_POST['bon_livraison']), FILTER_SANITIZE_STRING);
 
-    // Vérifier si la valeur est vide après nettoyage
-    if (empty($bonLivraison)) {
+    // Optionnel : Ajouter une validation stricte du format
+    if (!preg_match('/^[A-Za-z0-9\-]+$/', $bonLivraison)) {
         http_response_code(400);
-        echo json_encode(['error' => 'Le paramètre "bon_livraison" est vide ou invalide.']);
+        echo json_encode(['error' => 'Le format du bon de livraison est invalide.']);
         exit;
     }
 
     // Préparer la requête pour vérifier si le bon de livraison existe
-    $query = $bdd->prepare("SELECT COUNT(*) FROM Commandes WHERE bon_livraison = :bon_livraison");
-    $query->bindParam(':bon_livraison', $bonLivraison, PDO::PARAM_STR);
+    $query = $bdd->prepare("
+        SELECT COUNT(*) 
+        FROM Commandes 
+        WHERE bon_livraison = :bon_livraison
+    ");
+    $query->bindValue(':bon_livraison', $bonLivraison, PDO::PARAM_STR);
     $query->execute();
 
     // Vérifier si le bon de livraison existe déjà
@@ -45,5 +56,10 @@ try {
     error_log("Erreur lors de la vérification du bon de livraison : " . $e->getMessage());
     http_response_code(500); // Erreur interne
     echo json_encode(['error' => 'Erreur interne lors de la vérification du bon de livraison.']);
+} catch (Exception $e) {
+    // Gérer d'autres exceptions
+    error_log("Erreur inattendue : " . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['error' => 'Une erreur inattendue est survenue.']);
 }
 ?>
